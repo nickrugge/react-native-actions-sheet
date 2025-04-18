@@ -390,4 +390,12 @@ export type ActionSheetProps<SheetId extends keyof Sheets = never> = {
    * sheet to go beyond minimum snap point position with drag.
    */
   disableDragBeyondMinimumSnapPoint?: boolean;
+
+  /**
+   * When set to true, the ActionSheet will appear from the top of the screen
+   * instead of the bottom.
+   * 
+   * Default: `false`
+   */
+  top?: boolean;
 };

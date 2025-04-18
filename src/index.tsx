@@ -101,6 +101,7 @@ export default forwardRef<ActionSheetRef, ActionSheetProps>(
       onBeforeClose,
       enableGesturesInScrollView = true,
       disableDragBeyondMinimumSnapPoint,
+      top = false,
       ...props
     },
     ref,
@@ -207,6 +208,8 @@ export default forwardRef<ActionSheetRef, ActionSheetProps>(
         underlayTranslateY: new Animated.Value(100),
         keyboardTranslate: new Animated.Value(0),
         routeOpacity: new Animated.Value(0),
+        // For top sheet, we need to track the overlay position differently
+        underlayTranslateYTop: new Animated.Value(-100),
       }),
       [],
     );
@@ -268,7 +271,7 @@ export default forwardRef<ActionSheetRef, ActionSheetProps>(
             ...config,
             velocity: typeof velocity !== 'number' ? undefined : velocity,
           }).start();
-        }else {
+        } else {
           Animated.spring(animations.translateY, {
             toValue: initialValue.current,
             useNativeDriver: true,
@@ -304,9 +307,15 @@ export default forwardRef<ActionSheetRef, ActionSheetProps>(
         }
         const config = props.closeAnimationConfig;
         opacityAnimation(0);
+        
+        // Different hide animation based on whether it's top or bottom sheet
+        const toValue = top 
+          ? -actionSheetHeight.current * 1.3 // Move up and out of screen for top sheet
+          : dimensionsRef.current.height * 1.3; // Move down and out of screen for bottom sheet
+          
         const animation = Animated.spring(animations.translateY, {
           velocity: typeof vy !== 'number' ? 3.0 : vy + 1,
-          toValue: dimensionsRef.current.height * 1.3,
+          toValue,
           useNativeDriver: true,
           ...config,
         });
@@ -317,7 +326,7 @@ export default forwardRef<ActionSheetRef, ActionSheetProps>(
         }, 150);
       },
       // eslint-disable-next-line react-hooks/exhaustive-deps
-      [animated, opacityAnimation, props.closeAnimationConfig],
+      [animated, opacityAnimation, props.closeAnimationConfig, top],
     );
 
     const getCurrentPosition = React.useCallback(() => {
@@ -331,13 +340,22 @@ export default forwardRef<ActionSheetRef, ActionSheetProps>(
 
     const getNextPosition = React.useCallback(
       (snapIndex: number) => {
-        return (
-          actionSheetHeight.current +
-          minTranslateValue.current -
-          (actionSheetHeight.current * snapPoints[snapIndex]) / 100
-        );
+        if (top) {
+          // For top sheet, calculate position from top of screen
+          return (
+            (actionSheetHeight.current * snapPoints[snapIndex]) / 100 - 
+            actionSheetHeight.current
+          );
+        } else {
+          // For bottom sheet, calculate position from bottom of screen
+          return (
+            actionSheetHeight.current +
+            minTranslateValue.current -
+            (actionSheetHeight.current * snapPoints[snapIndex]) / 100
+          );
+        }
       },
-      [snapPoints],
+      [snapPoints, top],
     );
 
     const hardwareBackPressEvent = useRef<NativeEventSubscription>();
@@ -397,18 +415,37 @@ export default forwardRef<ActionSheetRef, ActionSheetProps>(
           event.nativeEvent.layout.height > dimensionsRef.current.height
             ? dimensionsRef.current.height
             : event.nativeEvent.layout.height;
-        minTranslateValue.current =
-          rootViewHeight -
-          (actionSheetHeight.current + safeAreaPaddings.current.bottom);
+            
+        // Calculate minTranslateValue differently for top and bottom sheets
+        if (top) {
+          // For top sheet, minTranslateValue is the negative of the sheet height plus top safe area
+          minTranslateValue.current = -(actionSheetHeight.current - safeAreaPaddings.current.top);
+        } else {
+          // For bottom sheet, it's the screen height minus sheet height and bottom safe area
+          minTranslateValue.current =
+            rootViewHeight -
+            (actionSheetHeight.current + safeAreaPaddings.current.bottom);
+        }
 
         if (initialValue.current < 0) {
-          animations.translateY.setValue(rootViewHeight * 1.1);
+          // Set initial position off-screen based on direction
+          animations.translateY.setValue(top ? -actionSheetHeight.current * 1.1 : rootViewHeight * 1.1);
         }
-        const nextInitialValue =
-          actionSheetHeight.current +
-          minTranslateValue.current -
-          (actionSheetHeight.current * snapPoints[currentSnapIndex.current]) /
-            100;
+        
+        // Calculate next initial value based on snap points
+        let nextInitialValue;
+        if (top) {
+          // For top sheet, calculate from top of screen
+          nextInitialValue =
+            (actionSheetHeight.current * snapPoints[currentSnapIndex.current]) / 100 - 
+            actionSheetHeight.current;
+        } else {
+          // For bottom sheet, calculate from bottom of screen
+          nextInitialValue =
+            actionSheetHeight.current +
+            minTranslateValue.current -
+            (actionSheetHeight.current * snapPoints[currentSnapIndex.current]) / 100;
+        }
 
         initialValue.current =
           (keyboard.keyboardShown || keyboardWasVisible.current) &&
@@ -417,30 +454,34 @@ export default forwardRef<ActionSheetRef, ActionSheetProps>(
             ? initialValue.current
             : nextInitialValue;
 
-        const sheetBottomEdgePosition =
-          initialValue.current +
-          (actionSheetHeight.current * snapPoints[currentSnapIndex.current]) /
-            100;
-
-        const sheetPositionWithKeyboard =
-          sheetBottomEdgePosition -
-          (dimensionsRef.current?.height - keyboard.keyboardHeight);
-
-        initialValue.current =
-          sheetPositionWithKeyboard > 0
-            ? initialValue.current - sheetPositionWithKeyboard
-            : initialValue.current;
-
+        // Handle keyboard adjustments
         if (keyboard.keyboardShown) {
-          minTranslateValue.current =
-            minTranslateValue.current -
-            (keyboard.keyboardHeight + safeAreaPaddings.current.bottom);
+          if (!top) {
+            // Only adjust for keyboard on bottom sheet
+            const sheetBottomEdgePosition =
+              initialValue.current +
+              (actionSheetHeight.current * snapPoints[currentSnapIndex.current]) / 100;
+
+            const sheetPositionWithKeyboard =
+              sheetBottomEdgePosition -
+              (dimensionsRef.current?.height - keyboard.keyboardHeight);
+
+            initialValue.current =
+              sheetPositionWithKeyboard > 0
+                ? initialValue.current - sheetPositionWithKeyboard
+                : initialValue.current;
+                
+            minTranslateValue.current =
+              minTranslateValue.current -
+              (keyboard.keyboardHeight + safeAreaPaddings.current.bottom);
+          }
 
           keyboardWasVisible.current = true;
           prevKeyboardHeight.current = keyboard.keyboardHeight;
         } else {
           keyboardWasVisible.current = false;
         }
+        
         opacityAnimation(1);
         setTimeout(() => {
           returnAnimation();
@@ -448,8 +489,13 @@ export default forwardRef<ActionSheetRef, ActionSheetProps>(
 
         if (initialValue.current > 100) {
           if (lock.current) return;
-          animations.underlayTranslateY.setValue(100);
+          if (top) {
+            animations.underlayTranslateYTop.setValue(-100);
+          } else {
+            animations.underlayTranslateY.setValue(100);
+          }
         }
+        
         if (Platform.OS === 'web') {
           document.body.style.overflowY = 'hidden';
           document.documentElement.style.overflowY = 'hidden';
@@ -628,7 +674,9 @@ export default forwardRef<ActionSheetRef, ActionSheetProps>(
     ]);
 
     /**
-     * Snap towards the top
+     * Snap towards the more open position
+     * For bottom sheet: this is upward
+     * For top sheet: this is downward
      */
     const snapForward = React.useCallback(
       (vy: number) => {
@@ -643,7 +691,13 @@ export default forwardRef<ActionSheetRef, ActionSheetProps>(
           nextSnapPoint = snapPoints[(nextSnapIndex = snapPoints.length - 1)];
         } else {
           for (let i = currentSnapIndex.current; i < snapPoints.length; i++) {
-            if (getNextPosition(i) < getCurrentPosition()) {
+            // For top sheet, we need to check if position is greater (moving down)
+            // For bottom sheet, we need to check if position is less (moving up)
+            const shouldSnap = top
+              ? getNextPosition(i) > getCurrentPosition()
+              : getNextPosition(i) < getCurrentPosition();
+              
+            if (shouldSnap) {
               nextSnapPoint = snapPoints[(nextSnapIndex = i)];
               break;
             }
@@ -660,16 +714,21 @@ export default forwardRef<ActionSheetRef, ActionSheetProps>(
 
         returnAnimation(vy);
       },
-      [getCurrentPosition, getNextPosition, returnAnimation, snapPoints],
+      [getCurrentPosition, getNextPosition, returnAnimation, snapPoints, top],
     );
     /**
-     * Snap towards the bottom
+     * Snap towards the more closed position
+     * For bottom sheet: this is downward
+     * For top sheet: this is upward
      */
     const snapBackward = React.useCallback(
       (vy: number) => {
         if (currentSnapIndex.current === 0) {
           if (closable) {
-            initialValue.current = dimensionsRef.current.height * 1.3;
+            // Set the initial value for hiding animation based on direction
+            initialValue.current = top 
+              ? -actionSheetHeight.current * 1.3 // Move up for top sheet
+              : dimensionsRef.current.height * 1.3; // Move down for bottom sheet
             hideSheet(vy);
           } else {
             initialValue.current = getNextPosition(currentSnapIndex.current);
@@ -681,7 +740,13 @@ export default forwardRef<ActionSheetRef, ActionSheetProps>(
         let nextSnapPoint = 0;
         let nextSnapIndex = 0;
         for (let i = currentSnapIndex.current; i > -1; i--) {
-          if (getNextPosition(i) > getCurrentPosition()) {
+          // For top sheet, we need to check if position is less (moving up)
+          // For bottom sheet, we need to check if position is greater (moving down)
+          const shouldSnap = top
+            ? getNextPosition(i) < getCurrentPosition()
+            : getNextPosition(i) > getCurrentPosition();
+            
+          if (shouldSnap) {
             nextSnapPoint = snapPoints[(nextSnapIndex = i)];
             break;
           }
@@ -703,6 +768,7 @@ export default forwardRef<ActionSheetRef, ActionSheetProps>(
         hideSheet,
         returnAnimation,
         snapPoints,
+        top,
       ],
     );
 
@@ -1516,18 +1582,34 @@ export default forwardRef<ActionSheetRef, ActionSheetProps>(
                     <Animated.View
                       pointerEvents="box-none"
                       style={{
-                        borderTopRightRadius:
-                          props.containerStyle?.borderTopRightRadius || 10,
-                        borderTopLeftRadius:
-                          props.containerStyle?.borderTopLeftRadius || 10,
+                        // Border radius based on top or bottom sheet
+                        ...(top
+                          ? {
+                              borderBottomRightRadius:
+                                props.containerStyle?.borderBottomRightRadius || 10,
+                              borderBottomLeftRadius:
+                                props.containerStyle?.borderBottomLeftRadius || 10,
+                              borderTopRightRadius:
+                                props.containerStyle?.borderTopRightRadius ||
+                                undefined,
+                              borderTopLeftRadius:
+                                props.containerStyle?.borderTopLeftRadius ||
+                                undefined,
+                            }
+                          : {
+                              borderTopRightRadius:
+                                props.containerStyle?.borderTopRightRadius || 10,
+                              borderTopLeftRadius:
+                                props.containerStyle?.borderTopLeftRadius || 10,
+                              borderBottomLeftRadius:
+                                props.containerStyle?.borderBottomLeftRadius ||
+                                undefined,
+                              borderBottomRightRadius:
+                                props.containerStyle?.borderBottomRightRadius ||
+                                undefined,
+                            }),
                         backgroundColor:
                           props.containerStyle?.backgroundColor || 'white',
-                        borderBottomLeftRadius:
-                          props.containerStyle?.borderBottomLeftRadius ||
-                          undefined,
-                        borderBottomRightRadius:
-                          props.containerStyle?.borderBottomRightRadius ||
-                          undefined,
                         borderRadius:
                           props.containerStyle?.borderRadius || undefined,
                         width: props.containerStyle?.width || '100%',
@@ -1537,9 +1619,20 @@ export default forwardRef<ActionSheetRef, ActionSheetProps>(
                         flex: undefined,
                         height: dimensions.height,
                         maxHeight: dimensions.height,
-                        paddingBottom: keyboard.keyboardShown
-                          ? keyboard.keyboardHeight || 0
-                          : safeAreaPaddings.current.bottom,
+                        // Padding based on top or bottom sheet
+                        ...(top
+                          ? {
+                              paddingTop: keyboard.keyboardShown
+                                ? 0
+                                : safeAreaPaddings.current.top,
+                            }
+                          : {
+                              paddingBottom: keyboard.keyboardShown
+                                ? keyboard.keyboardHeight || 0
+                                : safeAreaPaddings.current.bottom,
+                            }),
+                        // Position at top or bottom
+                        ...(top ? { top: 0 } : { bottom: 0 }),
                         //zIndex: 10,
                         transform: [
                           {
